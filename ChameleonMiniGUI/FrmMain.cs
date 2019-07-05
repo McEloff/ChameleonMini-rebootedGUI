@@ -2079,7 +2079,7 @@ namespace ChameleonMiniGUI
             var bytes = ReadFileIntoByteArray(filename);
 
             // Try to identify the dump type
-            IndentifyDumpTypeBySize(bytes.Length);
+            IndentifyDumpTypeBySize(bytes.Length, bytes);
 
             var xmodem = new XMODEM(_comport, XMODEM.Variants.XModemChecksum);
 
@@ -2104,12 +2104,25 @@ namespace ChameleonMiniGUI
             }
         }
 
-        private void IndentifyDumpTypeBySize(int byteLength)
+        private int IdentifyUIDSize(byte[] bytes)
+        {
+            // we accept more 16 bytes dump
+            // try to check single UID size
+            byte bcc = (byte) (bytes[0] ^ bytes[1] ^ bytes[2] ^ bytes[3]);
+            if (bcc == bytes[4] && (bytes[6] & 0xc0) == 0)
+                return 4;
+            // try to check double UID size
+            if ((bytes[8] & 0xc0) == 0x40)
+                return 7;
+            // by default single UID size
+            return 4;
+        }
+        private void IndentifyDumpTypeBySize(int byteLength, byte[] bytes)
         {
             switch (byteLength)
             {
                 case 4096:
-                    SendCommandWithoutResult($"CONFIG{_cmdExtension}=MF_CLASSIC_4K");
+                    SendCommandWithoutResult(IdentifyUIDSize(bytes) == 7 ? $"CONFIG{_cmdExtension}=MF_CLASSIC_4K_7B" : $"CONFIG{_cmdExtension}=MF_CLASSIC_4K");
                     break;
                 case 64:
                     SendCommandWithoutResult($"CONFIG{_cmdExtension}=MF_ULTRALIGHT");
@@ -2121,7 +2134,7 @@ namespace ChameleonMiniGUI
                     SendCommandWithoutResult($"CONFIG{_cmdExtension}=MF_ULTRALIGHT_EV1_164B");
                     break;
                 default:
-                    SendCommandWithoutResult($"CONFIG{_cmdExtension}=MF_CLASSIC_1K");
+                    SendCommandWithoutResult(IdentifyUIDSize(bytes) == 7 ? $"CONFIG{_cmdExtension}=MF_CLASSIC_1K_7B" : $"CONFIG{_cmdExtension}=MF_CLASSIC_1K");
                     break;
             }
         }
