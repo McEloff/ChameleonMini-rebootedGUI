@@ -11,6 +11,7 @@ namespace ChameleonMiniGUI.Json
     public class MifareUltralightCardInfo : MifareCardInfo
     {
         public const int PrefixLength = 48;
+        public const int NewPrefixLength = 56;
 
         MifareUltralightModel mfu { get { return Mifare as MifareUltralightModel; } }
 

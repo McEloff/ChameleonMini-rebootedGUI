@@ -2018,42 +2018,6 @@ namespace ChameleonMiniGUI
             AvailableCommands.AddRange(helpArray);
         }
 
-        private static bool HasUltralightHeader(IReadOnlyList<byte> bytes)
-        {
-            // empty header
-            var empty_header = new byte[]
-            {
-                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-            };
-
-            if (bytes.SequenceEqual(empty_header))
-            {
-                return true;
-            }
-
-            // detect mfu header. If probability of magic values is more than 50%, assume file has header.
-            var probability = 0d;
-            // first two bytes of version should be 0x00, 0x04
-            if (bytes[0] == 0x00 && bytes[1] == 0x04)
-                probability += 0.25;
-
-            // tbo should be ZERO
-            if (bytes[8] == 0x00 && bytes[9] == 0x00)
-                probability += 0.15;
-
-            // tbo1 should be ZERO
-            if (bytes[15] == 0x00)
-                probability += 0.15;
-
-            // tearing is normally 0xBD
-            if (bytes[10] == 0xBD || bytes[11] == 0xBD || bytes[12] == 0xBD)
-                probability += 0.35;
-
-            return (probability >= 0.50);
-        }
-
         private static byte[] ReadFileIntoByteArray(string filename)
         {
             var fi = new FileInfo(filename);
@@ -2066,10 +2030,17 @@ namespace ChameleonMiniGUI
             if (data.Length >= 1024 || data.Length == 320)
                 return data;
 
-            // ultralight/ntag based dump might have a header
-            if (HasUltralightHeader(data) )
+            // new format of ev1/ntag dump header
+            if (MifareUltralightModel.HasUltralightNewHeader(data))
             {
-                data = data.Skip(MifareUltralightCardInfo.PrefixLength).ToArray();
+                // extract header data into pages out of dump
+                return data.Skip(MifareUltralightCardInfo.NewPrefixLength).ToArray();
+
+            }
+            // ultralight/ntag based dump might have a header
+            if (MifareUltralightModel.HasUltralightHeader(data) )
+            {
+                return data.Skip(MifareUltralightCardInfo.PrefixLength).ToArray();
             }
             return data;
         }
@@ -2154,11 +2125,12 @@ namespace ChameleonMiniGUI
 
             // Also check if the tag is UL to save the counters too
             var configStr = SendCommand($"CONFIG{_cmdExtension}?").ToString();
-            if (!string.IsNullOrWhiteSpace(configStr) && (configStr.Contains("ULTRALIGHT")))
+            if (!string.IsNullOrWhiteSpace(configStr) && (configStr.Contains("ULTRALIGHT_EV1")))
             {
                 if (memsize < 4069)
                 {
                     // 3 more pages
+                    // for counters? todo - check new/old/none format of header
                     memsize += 3 * 4; 
                 }
             }
@@ -2188,7 +2160,7 @@ namespace ChameleonMiniGUI
 
                 if (neededBytes.Length < 1024 && neededBytes.Length != 320)
                 {
-                    if (HasUltralightHeader(neededBytes))
+                    if (MifareUltralightModel.HasUltralightHeader(neededBytes))
                     {
                     neededBytes = Enumerable
                         .Repeat((byte)0, MifareUltralightCardInfo.PrefixLength)
