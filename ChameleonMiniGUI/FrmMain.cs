@@ -2018,7 +2018,13 @@ namespace ChameleonMiniGUI
             AvailableCommands.AddRange(helpArray);
         }
 
-        private static byte[] ReadFileIntoByteArray(string filename)
+        private class DumpData
+        {
+            public byte[] Data;
+            public byte[] Extra;
+        }
+
+        private static DumpData ReadFileIntoByteArray(string filename)
         {
             var fi = new FileInfo(filename);
             if (!fi.Exists) return null;
@@ -2028,29 +2034,48 @@ namespace ChameleonMiniGUI
 
             // most likely Mifare Classic card.
             if (data.Length >= 1024 || data.Length == 320)
-                return data;
+                return new DumpData() { Data = data, Extra = new byte[] { } };
 
             // new format of ev1/ntag dump header
             if (MifareUltralightModel.HasUltralightNewHeader(data))
             {
                 // extract header data into pages out of dump
-                return data.Skip(MifareUltralightCardInfo.NewPrefixLength).ToArray();
-
+                var getVersion = data.Skip(0).Take(8);
+                var signature = data.Skip(12).Take(32);
+                var counters = data.Skip(44).Take(12);
+                return
+                    new DumpData()
+                    {
+                        Data = data.Skip(MifareUltralightCardInfo.NewPrefixLength).ToArray(),
+                        Extra = counters.Concat(getVersion).Concat(signature).ToArray()
+                    };
             }
             // ultralight/ntag based dump might have a header
             if (MifareUltralightModel.HasUltralightHeader(data) )
             {
-                return data.Skip(MifareUltralightCardInfo.PrefixLength).ToArray();
+                // extract header data into pages out of dump
+                var getVersion = data.Skip(0).Take(8);
+                var counters = new byte[] {0, 0, 0}.Concat(data.Skip(10).Take(1)).
+                    Concat(new byte[] { 0, 0, 0 }).Concat(data.Skip(11).Take(1)).
+                    Concat(new byte[] { 0, 0, 0 }).Concat(data.Skip(12).Take(1));
+                var signature = data.Skip(16).Take(32);
+                return
+                    new DumpData()
+                    {
+                        Data = data.Skip(MifareUltralightCardInfo.PrefixLength).ToArray(),
+                        Extra = counters.Concat(getVersion).Concat(signature).ToArray()
+                    };
             }
-            return data;
+            // for general purpose return zero-filled extra datas
+            return new DumpData() { Data = data, Extra = Enumerable.Repeat((byte)0, 52).ToArray() };
         }
 
         internal void UploadDump(string filename)
         {
-            var bytes = ReadFileIntoByteArray(filename);
+            var dump = ReadFileIntoByteArray(filename);
 
             // Try to identify the dump type
-            IndentifyDumpTypeBySize(bytes.Length, bytes);
+            IndentifyDumpTypeBySize(dump);
 
             var xmodem = new XMODEM(_comport, XMODEM.Variants.XModemChecksum);
 
@@ -2059,6 +2084,7 @@ namespace ChameleonMiniGUI
             // For the "110:WAITING FOR XMODEM" text
             _comport.ReadLine();
 
+            var bytes = dump.Data.Concat(dump.Extra).ToArray();
             int numBytesSuccessfullySent = xmodem.Send(bytes);
 
             if (numBytesSuccessfullySent == bytes.Length && xmodem.TerminationReason == XMODEM.TerminationReasonEnum.EndOfFile)
@@ -2088,12 +2114,12 @@ namespace ChameleonMiniGUI
             // by default single UID size
             return 4;
         }
-        private void IndentifyDumpTypeBySize(int byteLength, byte[] bytes)
+        private void IndentifyDumpTypeBySize(DumpData dump)
         {
-            switch (byteLength)
+            switch (dump.Data.Length)
             {
                 case 4096:
-                    SendCommandWithoutResult(IdentifyUIDSize(bytes) == 7 ? $"CONFIG{_cmdExtension}=MF_CLASSIC_4K_7B" : $"CONFIG{_cmdExtension}=MF_CLASSIC_4K");
+                    SendCommandWithoutResult(IdentifyUIDSize(dump.Data) == 7 ? $"CONFIG{_cmdExtension}=MF_CLASSIC_4K_7B" : $"CONFIG{_cmdExtension}=MF_CLASSIC_4K");
                     break;
                 case 64:
                     SendCommandWithoutResult($"CONFIG{_cmdExtension}=MF_ULTRALIGHT");
@@ -2105,7 +2131,7 @@ namespace ChameleonMiniGUI
                     SendCommandWithoutResult($"CONFIG{_cmdExtension}=MF_ULTRALIGHT_EV1_164B");
                     break;
                 default:
-                    SendCommandWithoutResult(IdentifyUIDSize(bytes) == 7 ? $"CONFIG{_cmdExtension}=MF_CLASSIC_1K_7B" : $"CONFIG{_cmdExtension}=MF_CLASSIC_1K");
+                    SendCommandWithoutResult(IdentifyUIDSize(dump.Data) == 7 ? $"CONFIG{_cmdExtension}=MF_CLASSIC_1K_7B" : $"CONFIG{_cmdExtension}=MF_CLASSIC_1K");
                     break;
             }
         }
@@ -2117,6 +2143,7 @@ namespace ChameleonMiniGUI
 
             // Default value
             int memsize = 4096;
+            int extrasize = 0;
 
             if (!string.IsNullOrEmpty(memsizeStr))
             {
@@ -2129,9 +2156,8 @@ namespace ChameleonMiniGUI
             {
                 if (memsize < 4069)
                 {
-                    // 3 more pages
-                    // for counters? todo - check new/old/none format of header
-                    memsize += 3 * 4; 
+                    // 52 bytes extra data = 3 * 4 (counters, tearing) + 8 (version) + 32 (signature)
+                    extrasize = 52;
                 }
             }
 
@@ -2149,24 +2175,33 @@ namespace ChameleonMiniGUI
                 txt_output.Text += msg;
 
                 byte[] neededBytes = bytes;
+                byte[] extraBytes = new byte[] { };
 
                 if (bytes.Length > memsize)
                 {
                     // Create a new array same size as memsize
                     neededBytes = new byte[memsize];
-
                     Array.Copy(bytes, neededBytes, neededBytes.Length);
+                    // Create extra data
+                    if (bytes.Length >= memsize + extrasize)
+                    {
+                        extraBytes = new byte[extrasize];
+                        Array.Copy(bytes.Skip(memsize).ToArray(), extraBytes, extrasize);
+                    }
                 }
 
-                if (neededBytes.Length < 1024 && neededBytes.Length != 320)
+                if (neededBytes.Length < 1024 && neededBytes.Length != 320 && neededBytes.Length % 4 == 0 && extraBytes.Length > 0)
                 {
-                    if (MifareUltralightModel.HasUltralightHeader(neededBytes))
-                    {
-                    neededBytes = Enumerable
-                        .Repeat((byte)0, MifareUltralightCardInfo.PrefixLength)
+                    // Construct dump with new heder format
+                    var counters = extraBytes.Skip(0).Take(12);
+                    var version = extraBytes.Skip(12).Take(8);
+                    var signature = extraBytes.Skip(20).Take(32);
+                    byte[] pagecount = new byte[] { (byte)(neededBytes.Length / 4 - 1)};
+                    neededBytes =  version
+                        .Concat(Enumerable.Repeat((byte)0, 3)).Concat(pagecount)
+                        .Concat(signature).Concat(counters)
                         .Concat(neededBytes)
                         .ToArray();
-                    }
                 }
                 // Write the actual file
                 var dumpStrategy = DumpStrategyFactory.Create(filename);

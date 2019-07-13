@@ -11,8 +11,6 @@ namespace ChameleonMiniGUI.Json
     public class MifareUltralightModel : MifareModel
     {
         private MifareUltralightCardInfo info;
-        private bool NewHeaderFormat = true;
-        private bool OldHeaderFormat = false;
 
         [DataMember(Order = 1)]
         public override string FileType
@@ -39,29 +37,34 @@ namespace ChameleonMiniGUI.Json
         public override byte[] ToByteArray()
         {
             var stba = new Func<string, byte[]>(MifareClassicModel.StringToByteArray);
-            if (NewHeaderFormat) {
-                byte[] pages = { (byte) (Blocks.Length) };
+            if (info.Counter0 != null && info.Counter1 != null && info.Counter2 != null) {
+                // Save as new header dump format with counters
+                byte[] pages = { (byte) (Blocks.Length - 1) };
                 return stba(info.Version)
                     .Concat(stba(info.TBO_0))
                     .Concat(stba(info.TBO_1))
                     .Concat(pages)
                     .Concat(stba(info.Signature))
-                    .Concat(stba(info.Counter.Substring(0, 3))).Concat(stba(info.Tearing.Substring(0, 1)))
-                    .Concat(stba(info.Counter.Substring(3, 3))).Concat(stba(info.Tearing.Substring(1, 1)))
-                    .Concat(stba(info.Counter.Substring(6, 3))).Concat(stba(info.Tearing.Substring(2, 1)))
+                    .Concat(stba(info.Counter0)).Concat(stba(info.Tearing0))
+                    .Concat(stba(info.Counter1)).Concat(stba(info.Tearing1))
+                    .Concat(stba(info.Counter2)).Concat(stba(info.Tearing2))
                     .Concat(Blocks.SelectMany(bytes => bytes))
                     .ToArray();
             }
-            else if (OldHeaderFormat)
+            else if (info.Tearing0 != null && info.Tearing1 != null && info.Tearing2 != null)
+                // Save as old header dump format with tearing, but without counters
                 return stba(info.Version)
                     .Concat(stba(info.TBO_0))
-                    .Concat(stba(info.Tearing))
+                    .Concat(stba(info.Tearing0))
+                    .Concat(stba(info.Tearing1))
+                    .Concat(stba(info.Tearing2))
                     .Concat(stba(info.Pack))
                     .Concat(stba(info.TBO_1))
                     .Concat(stba(info.Signature))
                     .Concat(Blocks.SelectMany(bytes => bytes))
                     .ToArray();
             else
+                // Save as simple dump format
                 return Blocks.SelectMany(bytes => bytes)
                     .ToArray();
         }
@@ -128,45 +131,51 @@ namespace ChameleonMiniGUI.Json
             int pages = (data.Length - headerLength) / 4;
             return new MifareUltralightModel()
             {
-                NewHeaderFormat = isNewHeaderFormat,
-                OldHeaderFormat = isOldHeaderFormat,
                 Created = "ChameleonMiniGUI",
                 Card = isNewHeaderFormat ?
                 new MifareUltralightCardInfo()
                 {
                     Version = MifareClassicModel.ByteArrayToString(data.Take(8)),
                     TBO_0 = MifareClassicModel.ByteArrayToString(data.Skip(8).Take(2)),
-                    Tearing = MifareClassicModel.ByteArrayToString(data.Skip(44 + 3).Take(1)) +
-                              MifareClassicModel.ByteArrayToString(data.Skip(44 + 7).Take(1)) +
-                              MifareClassicModel.ByteArrayToString(data.Skip(44 + 11).Take(1)),
+                    Tearing0 = MifareClassicModel.ByteArrayToString(data.Skip(44 + 3).Take(1)),
+                    Tearing1 = MifareClassicModel.ByteArrayToString(data.Skip(44 + 7).Take(1)),
+                    Tearing2 = MifareClassicModel.ByteArrayToString(data.Skip(44 + 11).Take(1)),
                     Pack = "0000",
                     TBO_1 = MifareClassicModel.ByteArrayToString(data.Skip(10).Take(1)),
                     Signature = MifareClassicModel.ByteArrayToString(data.Skip(12).Take(32)),
-                    Counter = MifareClassicModel.ByteArrayToString(data.Skip(44 + 0).Take(3)) +
-                              MifareClassicModel.ByteArrayToString(data.Skip(44 + 4).Take(3)) +
-                              MifareClassicModel.ByteArrayToString(data.Skip(44 + 8).Take(3))
+                    Counter0 = MifareClassicModel.ByteArrayToString(data.Skip(44 + 0).Take(3)),
+                    Counter1 = MifareClassicModel.ByteArrayToString(data.Skip(44 + 4).Take(3)),
+                    Counter2 = MifareClassicModel.ByteArrayToString(data.Skip(44 + 8).Take(3))
                 }
                 : isOldHeaderFormat ?
                 new MifareUltralightCardInfo()
                 {
                     Version = MifareClassicModel.ByteArrayToString(data.Take(8)),
                     TBO_0 = MifareClassicModel.ByteArrayToString(data.Skip(8).Take(2)),
-                    Tearing = MifareClassicModel.ByteArrayToString(data.Skip(10).Take(3)),
+                    Tearing0 = MifareClassicModel.ByteArrayToString(data.Skip(10).Take(1)),
+                    Tearing1 = MifareClassicModel.ByteArrayToString(data.Skip(10).Take(1)),
+                    Tearing2 = MifareClassicModel.ByteArrayToString(data.Skip(10).Take(1)),
                     Pack = MifareClassicModel.ByteArrayToString(data.Skip(13).Take(2)),
                     TBO_1 = MifareClassicModel.ByteArrayToString(data.Skip(15).Take(1)),
                     Signature = MifareClassicModel.ByteArrayToString(data.Skip(16).Take(32)),
-                    Counter = "000000000000000000"
+                    Counter0 = "000000",
+                    Counter1 = "000000",
+                    Counter2 = "000000"
                 }
                 :
                 new MifareUltralightCardInfo()
                 {
                     Version = null,
                     TBO_0 = null,
-                    Tearing = null,
+                    Tearing0 = null,
+                    Tearing1 = null,
+                    Tearing2 = null,
                     Pack = null,
                     TBO_1 = null,
                     Signature = null,
-                    Counter = null
+                    Counter0 = null,
+                    Counter1 = null,
+                    Counter2 = null
                 }
                 ,
                 Blocks = MifareClassicModel.ToNestedByteArray(data.Skip(headerLength).ToArray(), 4)
